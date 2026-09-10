@@ -39,6 +39,7 @@ func Connect(socketPath string) (*Client, error) {
 		Events:  make(chan map[string]any, 64),
 		closed:  make(chan struct{}),
 	}
+	c.reqID.Store(100000)
 	go c.readLoop()
 	return c, nil
 }
@@ -139,6 +140,28 @@ func (c *Client) readLoop() {
 // DroppedEvents returns the number of events discarded because the Events channel buffer was full.
 func (c *Client) DroppedEvents() int64 {
 	return c.droppedEvents.Load()
+}
+
+// Send sends a JSON command without requesting or waiting for an ID-matched response.
+func (c *Client) Send(args ...any) error {
+	select {
+	case <-c.closed:
+		return fmt.Errorf("connection closed")
+	default:
+	}
+
+	payload := map[string]any{
+		"command": args,
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_, err = c.conn.Write(append(b, '\n'))
+	return err
 }
 
 // Command sends a JSON command and waits for the matching response.

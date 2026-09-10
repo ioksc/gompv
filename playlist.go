@@ -52,30 +52,25 @@ func (c *Client) GetPlaylist() ([]PlaylistItem, int, error) {
 
 // PlayIndex switches playback to the specified playlist index.
 func (c *Client) PlayIndex(idx int) error {
-	_, err := c.Command("playlist-play-index", idx)
-	return err
+	return c.Send("playlist-play-index", idx)
 }
 
 // RemoveIndex removes a track from the playlist by its index.
 func (c *Client) RemoveIndex(idx int) error {
-	_, err := c.Command("playlist-remove", idx)
-	return err
+	return c.Send("playlist-remove", idx)
 }
 
 // Shuffle shuffles the tracks in the current playlist.
 func (c *Client) Shuffle() error {
-	_, err := c.Command("playlist-shuffle")
-	return err
+	return c.Send("playlist-shuffle")
 }
 
 // TogglePause toggles between pause and play states.
 func (c *Client) TogglePause() error {
-	_, err := c.Command("cycle", "pause")
-	return err
+	return c.Send("cycle", "pause")
 }
 
 // SeekRelative seeks forward or backward by the specified number of seconds.
 func (c *Client) SeekRelative(seconds float64) error {
-	_, err := c.Command("seek", seconds, "relative")
-	return err
+	return c.Send("seek", seconds, "relative")
 }
