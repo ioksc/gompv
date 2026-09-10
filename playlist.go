@@ -25,7 +25,7 @@ func (p PlaylistItem) DisplayName() string {
 	return "(unknown)"
 }
 
-// GetPlaylist retrieves the current playlist and returns the index of the active item (-1 if none).
+// GetPlaylist queries the current playlist and returns the active track index (-1 if none).
 func (c *Client) GetPlaylist() ([]PlaylistItem, int, error) {
 	raw, err := c.Command("get_property", "playlist")
 	if err != nil {
@@ -60,17 +60,17 @@ func (c *Client) RemoveIndex(idx int) error {
 	return c.Send("playlist-remove", idx)
 }
 
-// Shuffle shuffles the tracks in the current playlist.
+// Shuffle randomizes the order of tracks in the playlist.
 func (c *Client) Shuffle() error {
 	return c.Send("playlist-shuffle")
 }
 
-// TogglePause toggles between pause and play states.
+// TogglePause toggles the playback state between pause and play.
 func (c *Client) TogglePause() error {
 	return c.Send("cycle", "pause")
 }
 
-// SeekRelative seeks forward or backward by the specified number of seconds.
+// SeekRelative performs a relative seek by the specified number of seconds.
 func (c *Client) SeekRelative(seconds float64) error {
 	return c.Send("seek", seconds, "relative")
 }

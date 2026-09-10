@@ -9,13 +9,13 @@ import (
 	"time"
 )
 
-// Server manages the background mpv process.
+// Server manages the background mpv process lifecycle.
 type Server struct {
 	cmd        *exec.Cmd
 	SocketPath string
 }
 
-// StartServer removes any stale socket if it exists and launches mpv without a graphical user interface.
+// StartServer removes any stale socket if it exists and launches mpv in background IPC mode.
 func StartServer(socketPath string, files ...string) (*Server, error) {
 	_ = os.Remove(socketPath)
 
@@ -41,7 +41,7 @@ func StartServer(socketPath string, files ...string) (*Server, error) {
 	}, nil
 }
 
-// StartAndConnect is a convenience helper that launches mpv and connects to it using ConnectWithRetry.
+// StartAndConnect launches mpv and establishes a connection using retry logic.
 func StartAndConnect(ctx context.Context, socketPath string, files ...string) (*Server, *Client, error) {
 	srv, err := StartServer(socketPath, files...)
 	if err != nil {
@@ -57,16 +57,28 @@ func StartAndConnect(ctx context.Context, socketPath string, files ...string) (*
 	return srv, client, nil
 }
 
-// Wait blocks until the mpv process terminates.
+// Wait blocks until the underlying mpv process terminates.
 func (s *Server) Wait() error {
 	return s.cmd.Wait()
 }
 
-// Stop terminates the mpv process cleanly and removes the socket file.
+// Stop terminates the mpv process cleanly with timeout fallback and removes the socket file.
 func (s *Server) Stop() {
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Signal(syscall.SIGTERM)
-		_, _ = s.cmd.Process.Wait()
+
+		done := make(chan struct{})
+		go func() {
+			_ = s.cmd.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			_ = s.cmd.Process.Kill()
+			_ = s.cmd.Wait()
+		}
 	}
 	_ = os.Remove(s.SocketPath)
 }
