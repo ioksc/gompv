@@ -80,8 +80,10 @@ func (c *Client) readLoop() {
 	}()
 
 	scanner := bufio.NewScanner(c.conn)
-	// Tamaño reducido a 256KB como sugerencia de optimización de memoria
-	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
+	// mpv may emit long lines (extensive playlists, large metadata, etc.).
+	// Use a generous limit (8MB) to prevent bufio.ErrTooLong during normal operation.
+	const maxLineSize = 8 * 1024 * 1024
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
 	for {
 		_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -96,6 +98,13 @@ func (c *Client) readLoop() {
 				var netErr net.Error
 				if errors.As(err, &netErr) && netErr.Timeout() {
 					continue
+				}
+				if errors.Is(err, bufio.ErrTooLong) {
+					// The scanner becomes unusable after ErrTooLong (Scan() will return
+					// false indefinitely), so we cannot continue reading from it. Explicitly
+					// close the connection so the client receives a clear error instead of
+					// hanging until timeout.
+					_ = c.conn.Close()
 				}
 			}
 			return
@@ -256,7 +265,7 @@ func parseMpvResponse(raw json.RawMessage) (json.RawMessage, error) {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return raw, nil
+		return raw, fmt.Errorf("failed to unmarshal mpv response: %w", err)
 	}
 	if meta.Error != "" && meta.Error != "success" {
 		return raw, fmt.Errorf("mpv: %s", meta.Error)

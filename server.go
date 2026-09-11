@@ -31,6 +31,10 @@ func StartServer(socketPath string, files ...string) (*Server, error) {
 	args = append(args, files...)
 
 	cmd := exec.Command("mpv", args...)
+	// Place mpv into its own process group so we can signal the entire
+	// process tree (mpv + potential children) in Stop(), rather than
+	// just the main process.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start mpv process: %w", err)
 	}
@@ -65,7 +69,8 @@ func (s *Server) Wait() error {
 // Stop terminates the mpv process cleanly with timeout fallback and removes the socket file.
 func (s *Server) Stop() {
 	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Signal(syscall.SIGTERM)
+		pgid := s.cmd.Process.Pid
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
 
 		done := make(chan struct{})
 		go func() {
@@ -76,7 +81,7 @@ func (s *Server) Stop() {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			_ = s.cmd.Process.Kill()
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 			_ = s.cmd.Wait()
 		}
 	}
