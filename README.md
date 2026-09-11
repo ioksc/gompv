@@ -18,7 +18,7 @@ A clean, idiomatic, and concurrent-safe Go client for controlling [mpv](https://
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.27
 - Linux / Unix environment with `mpv` installed (uses Unix domain sockets).
 
 ## Installation
@@ -32,11 +32,13 @@ go get github.com/ioksc/gompv
 ### 1. Connect to an existing mpv instance
 
 Start mpv with an IPC socket:
+
 ```bash
 mpv --input-ipc-server=/tmp/mpv.sock --idle=yes
 ```
 
 Connect using `gompv`:
+
 ```go
 package main
 
@@ -114,17 +116,20 @@ func main() {
 ## API Highlights
 
 ### Low-level IPC Commands
+
 - `client.Command(args ...any) (json.RawMessage, error)`: Synchronously sends a command and waits for response.
 - `client.CommandContext(ctx, args ...any)`: Context-aware synchronous command with custom deadlines.
 - `client.Send(args ...any) error`: Asynchronous fire-and-forget command.
 
 ### High-level Playback Controls
+
 - `client.TogglePause()`, `client.Pause()`, `client.Resume()`, `client.Stop()`
 - `client.Next()`, `client.Prev()`
 - `client.SeekRelative(seconds)`, `client.SeekAbsolute(seconds)`
 - `client.SetVolume(vol)`, `client.GetVolume()`, `client.SetMute(bool)`, `client.ToggleMute()`
 
 ### Playlists
+
 - `client.GetPlaylist() ([]PlaylistItem, int, error)`
 - `client.PlayIndex(index)`
 - `client.RemoveIndex(index)`
@@ -132,12 +137,28 @@ func main() {
 - `client.Shuffle()`
 - `client.LoadFile(path, mode...)`
 
-### Events
-Events arrive on `client.Events() <-chan Event`:
+### Events & Properties
+
+- `client.Events() <-chan Event`: Channel streaming typed events from mpv.
+- `client.ObserveProperties(properties ...string)`: Observes properties (defaults to common media properties if empty).
+- `client.ObserveProperty(id int64, property string)`: Observes a specific property.
 - `ev.PropertyChange() (name string, data any, ok bool)`
 - `ev.PropertyFloat() (name string, val float64, ok bool)`
 - `ev.PropertyBool() (name string, val bool, ok bool)`
 - `ev.PropertyString() (name string, val string, ok bool)`
+
+### Error Handling
+
+Standard sentinel errors are provided for robust inspection via `errors.Is`:
+
+- `gompv.ErrClosed`: Returned when an operation is attempted on a closed connection.
+- `gompv.ErrTimeout`: Returned when a command response exceeds its deadline.
+
+```go
+if errors.Is(err, gompv.ErrTimeout) {
+    log.Println("Command timed out")
+}
+```
 
 ## License
 
