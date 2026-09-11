@@ -24,7 +24,6 @@ func (p PlaylistItem) DisplayName() string {
 	}
 	return "(unknown)"
 }
-
 // GetPlaylist queries the current playlist and returns the active track index (-1 if none).
 func (c *Client) GetPlaylist() ([]PlaylistItem, int, error) {
 	raw, err := c.Command("get_property", "playlist")
@@ -32,6 +31,8 @@ func (c *Client) GetPlaylist() ([]PlaylistItem, int, error) {
 		return nil, -1, err
 	}
 
+	// Restauramos la estructura con el envoltorio "data" porque c.Command
+	// devuelve el objeto JSON completo de la respuesta de mpv.
 	var resp struct {
 		Data []PlaylistItem `json:"data"`
 	}
@@ -52,22 +53,26 @@ func (c *Client) GetPlaylist() ([]PlaylistItem, int, error) {
 
 // PlayIndex switches playback to the specified playlist index.
 func (c *Client) PlayIndex(idx int) error {
-	return c.Send("playlist-play-index", idx)
+	_, err := c.Command("playlist-play-index", idx)
+	return err
 }
 
 // RemoveIndex removes a track from the playlist by its index.
 func (c *Client) RemoveIndex(idx int) error {
-	return c.Send("playlist-remove", idx)
+	_, err := c.Command("playlist-remove", idx)
+	return err
 }
 
 // Shuffle randomizes the order of tracks in the playlist.
 func (c *Client) Shuffle() error {
-	return c.Send("playlist-shuffle")
+	_, err := c.Command("playlist-shuffle")
+	return err
 }
 
 // TogglePause toggles the playback state between pause and play.
 func (c *Client) TogglePause() error {
-	return c.Send("cycle", "pause")
+	_, err := c.Command("cycle", "pause")
+	return err
 }
 
 // SeekRelative performs a relative seek by the specified number of seconds.

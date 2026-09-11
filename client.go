@@ -2,6 +2,7 @@ package gompv
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -79,7 +80,8 @@ func (c *Client) readLoop() {
 	}()
 
 	scanner := bufio.NewScanner(c.conn)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// Tamaño reducido a 256KB como sugerencia de optimización de memoria
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
 	for {
 		_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -99,8 +101,10 @@ func (c *Client) readLoop() {
 			return
 		}
 
+		decoder := json.NewDecoder(bytes.NewReader(scanner.Bytes()))
+		decoder.UseNumber()
 		var rawMsg map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &rawMsg); err != nil {
+		if err := decoder.Decode(&rawMsg); err != nil {
 			continue
 		}
 
