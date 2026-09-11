@@ -27,7 +27,7 @@ func (e Event) PropertyChange() (string, any, bool) {
 	return name, e.Raw["data"], true
 }
 
-// PropertyFloat extrae de forma segura el valor de una propiedad numérica como float64.
+// PropertyFloat safely extracts the value of a numeric property as a float64.
 func (e Event) PropertyFloat() (string, float64, bool) {
 	name, data, ok := e.PropertyChange()
 	if !ok {
@@ -37,7 +37,7 @@ func (e Event) PropertyFloat() (string, float64, bool) {
 	return name, f, valid
 }
 
-// PropertyBool extrae de forma segura el valor de una propiedad booleana.
+// PropertyBool safely extracts the value of a boolean property.
 func (e Event) PropertyBool() (string, bool, bool) {
 	name, data, ok := e.PropertyChange()
 	if !ok {
@@ -47,7 +47,26 @@ func (e Event) PropertyBool() (string, bool, bool) {
 	return name, b, valid
 }
 
-// toFloat encapsula la conversión interna de tipos numéricos de mpv a float64.
+// PropertyString safely extracts a text property, handling both direct strings and json.RawMessage wrappers.
+func (e Event) PropertyString() (string, string, bool) {
+	name, data, ok := e.PropertyChange()
+	if !ok {
+		return "", "", false
+	}
+
+	switch v := data.(type) {
+	case string:
+		return name, v, true
+	case json.RawMessage:
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			return name, s, true
+		}
+	}
+	return name, "", false
+}
+
+// toFloat encapsulates the internal conversion of mpv numeric types to float64.
 func toFloat(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -65,6 +84,6 @@ func toFloat(v any) (float64, bool) {
 		}
 		return 0, false
 	default:
-		return 0, false
 	}
+	return 0, false
 }
