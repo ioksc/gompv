@@ -250,3 +250,19 @@ func TestClientSentinelErrors(t *testing.T) {
 		t.Errorf("esperaba ErrClosed en Command tras Close, se obtuvo: %v", err)
 	}
 }
+
+func TestConnectWithRetryValidation(t *testing.T) {
+	// Intervalo inválido (<= 0)
+	_, err := ConnectWithRetry(context.Background(), "/tmp/fake.sock", 0)
+	if err == nil {
+		t.Error("ConnectWithRetry con interval 0 debió fallar")
+	}
+
+	// Contexto cancelado antes de iniciar
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = ConnectWithRetry(ctx, "/tmp/fake.sock", 100*time.Millisecond)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("esperaba context.Canceled, se obtuvo: %v", err)
+	}
+}

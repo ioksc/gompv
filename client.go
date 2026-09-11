@@ -58,6 +58,13 @@ func Connect(socketPath string) (*Client, error) {
 
 // ConnectWithRetry repeatedly attempts to connect until the socket appears or context is canceled.
 func ConnectWithRetry(ctx context.Context, socketPath string, interval time.Duration) (*Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if interval <= 0 {
+		return nil, fmt.Errorf("gompv: interval must be greater than zero")
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
