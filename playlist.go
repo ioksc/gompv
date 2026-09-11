@@ -69,13 +69,19 @@ func (c *Client) Shuffle() error {
 	return err
 }
 
-// TogglePause toggles the playback state between pause and play.
-func (c *Client) TogglePause() error {
-	_, err := c.Command("cycle", "pause")
+// ClearPlaylist removes all entries from the playlist.
+func (c *Client) ClearPlaylist() error {
+	_, err := c.Command("playlist-clear")
 	return err
 }
 
-// SeekRelative performs a relative seek by the specified number of seconds.
-func (c *Client) SeekRelative(seconds float64) error {
-	return c.Send("seek", seconds, "relative")
+// LoadFile appends or replaces a file in the playlist.
+// Mode can be "replace", "append", or "append-play". Defaults to "replace".
+func (c *Client) LoadFile(path string, mode ...string) error {
+	m := "replace"
+	if len(mode) > 0 && mode[0] != "" {
+		m = mode[0]
+	}
+	_, err := c.Command("loadfile", path, m)
+	return err
 }

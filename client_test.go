@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -12,10 +13,6 @@ import (
 	"testing"
 	"time"
 )
-
-// ============================================================
-// 1. Tests unitarios puros — no requieren mpv instalado.
-// ============================================================
 
 func TestParseMpvResponse(t *testing.T) {
 	tests := []struct {
@@ -64,31 +61,6 @@ func TestToInt64(t *testing.T) {
 	}
 }
 
-func TestPlaylistItemDisplayName(t *testing.T) {
-	tests := []struct {
-		name string
-		item PlaylistItem
-		want string
-	}{
-		{"usa título si existe", PlaylistItem{Title: "Mi Canción", Filename: "/x/song.mp3"}, "Mi Canción"},
-		{"cae al nombre base del archivo", PlaylistItem{Filename: "/music/rock/song.flac"}, "song.flac"},
-		{"desconocido si no hay nada", PlaylistItem{}, "(unknown)"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.item.DisplayName(); got != tt.want {
-				t.Errorf("DisplayName() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// ============================================================
-// Servidor IPC falso: imita el protocolo JSON-line de mpv sobre
-// un socket unix, sin depender del binario real.
-// ============================================================
-
 type fakeIPCServer struct {
 	listener   net.Listener
 	socketPath string
@@ -117,17 +89,11 @@ func (s *fakeIPCServer) Close() {
 	_ = s.listener.Close()
 }
 
-// ============================================================
-// 2. Test que reproduce el bug original del buffer del scanner.
-// ============================================================
-
 func TestReadLoopHandlesOversizedLine(t *testing.T) {
 	const oversized = 9 * 1024 * 1024 // > maxLineSize (8MB) en readLoop
 
 	srv := startFakeIPCServer(t, func(conn net.Conn) {
 		defer conn.Close()
-		// Línea JSON válida pero enorme: podría pasar con una playlist con
-		// miles de entradas o metadata (media-title) muy larga.
 		var sb strings.Builder
 		sb.WriteString(`{"data":"`)
 		sb.WriteString(strings.Repeat("x", oversized))
@@ -143,12 +109,8 @@ func TestReadLoopHandlesOversizedLine(t *testing.T) {
 	}
 	defer client.Close()
 
-	// El readLoop debe detectar bufio.ErrTooLong y cerrar la conexión de
-	// forma controlada (cerrando Events), en vez de quedarse leyendo para
-	// siempre o entrar en un busy-loop reintentando sobre un scanner ya
-	// inutilizable.
 	select {
-	case _, ok := <-client.Events:
+	case _, ok := <-client.Events():
 		if ok {
 			t.Error("se esperaba que el canal Events se cerrara, pero llegó un evento")
 		}
@@ -156,18 +118,12 @@ func TestReadLoopHandlesOversizedLine(t *testing.T) {
 		t.Fatal("timeout: el readLoop no cerró el canal Events tras la línea sobredimensionada")
 	}
 
-	// Cualquier Command() posterior debe fallar rápido con un error claro,
-	// no colgarse hasta expirar el timeout de 5s por defecto.
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	if _, err := client.CommandContext(ctx, "get_property", "volume"); err == nil {
 		t.Error("se esperaba error tras el cierre por línea sobredimensionada, pero Command tuvo éxito")
 	}
 }
-
-// ============================================================
-// 3. Test de concurrencia — correr con `go test -race`.
-// ============================================================
 
 func TestClientConcurrentCommands(t *testing.T) {
 	srv := startFakeIPCServer(t, func(conn net.Conn) {
@@ -182,7 +138,7 @@ func TestClientConcurrentCommands(t *testing.T) {
 				continue
 			}
 			if req.RequestID == 0 {
-				continue // comando asíncrono (Send), sin respuesta esperada
+				continue
 			}
 			resp := fmt.Sprintf(`{"data":true,"error":"success","request_id":%d}`+"\n", req.RequestID)
 			if _, err := conn.Write([]byte(resp)); err != nil {
@@ -250,7 +206,6 @@ func TestClientIdleConnection(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Simular inactividad durante más de 2 segundos (el antiguo read deadline)
 	time.Sleep(2100 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -262,5 +217,36 @@ func TestClientIdleConnection(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "pong") {
 		t.Errorf("respuesta inesperada: %s", string(raw))
+	}
+}
+
+func TestClientSentinelErrors(t *testing.T) {
+	srv := startFakeIPCServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		// No responde para forzar timeout
+		time.Sleep(1 * time.Second)
+	})
+	defer srv.Close()
+
+	client, err := Connect(srv.socketPath)
+	if err != nil {
+		t.Fatalf("falló Connect: %v", err)
+	}
+
+	// Timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = client.CommandContext(ctx, "slow_command")
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, ErrTimeout) {
+		t.Errorf("esperaba error de timeout, se obtuvo: %v", err)
+	}
+
+	// Cerrar y verificar ErrClosed
+	_ = client.Close()
+	if err := client.Send("test"); !errors.Is(err, ErrClosed) {
+		t.Errorf("esperaba ErrClosed en Send tras Close, se obtuvo: %v", err)
+	}
+	if _, err := client.Command("test"); !errors.Is(err, ErrClosed) {
+		t.Errorf("esperaba ErrClosed en Command tras Close, se obtuvo: %v", err)
 	}
 }

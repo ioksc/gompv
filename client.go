@@ -12,6 +12,13 @@ import (
 	"time"
 )
 
+var (
+	// ErrClosed is returned when an operation is performed on a closed client.
+	ErrClosed = errors.New("gompv: connection closed")
+	// ErrTimeout is returned when a command response exceeds its deadline.
+	ErrTimeout = errors.New("gompv: request timeout")
+)
+
 // Client handles concurrent-safe IPC communication over an mpv Unix socket.
 type Client struct {
 	conn          net.Conn
@@ -19,11 +26,16 @@ type Client struct {
 	mu            sync.Mutex
 	writeMu       sync.Mutex
 	pending       map[int64]chan json.RawMessage
-	Events        chan Event
+	events        chan Event
 	droppedEvents atomic.Int64
 
 	closed chan struct{}
 	once   sync.Once
+}
+
+// Events returns a read-only channel of events received from mpv.
+func (c *Client) Events() <-chan Event {
+	return c.events
 }
 
 // Connect dials the given socket path and initializes the background read loop.
@@ -36,7 +48,7 @@ func Connect(socketPath string) (*Client, error) {
 	c := &Client{
 		conn:    conn,
 		pending: make(map[int64]chan json.RawMessage),
-		Events:  make(chan Event, 64),
+		events:  make(chan Event, 64),
 		closed:  make(chan struct{}),
 	}
 	c.reqID.Store(100000)
@@ -78,7 +90,7 @@ func (c *Client) signalClosed() {
 func (c *Client) readLoop() {
 	defer func() {
 		c.signalClosed()
-		close(c.Events)
+		close(c.events)
 	}()
 
 	scanner := bufio.NewScanner(c.conn)
@@ -105,11 +117,11 @@ func (c *Client) readLoop() {
 			var rawMsg map[string]any
 			_ = json.Unmarshal(line, &rawMsg)
 			ev := Event{
-				Type: header.Event,
+				Type: EventType(header.Event),
 				Raw:  rawMsg,
 			}
 			select {
-			case c.Events <- ev:
+			case c.events <- ev:
 			case <-c.closed:
 				return
 			default:
@@ -156,7 +168,7 @@ func (c *Client) DroppedEvents() int64 {
 func (c *Client) Send(args ...any) error {
 	select {
 	case <-c.closed:
-		return fmt.Errorf("connection closed")
+		return ErrClosed
 	default:
 	}
 
@@ -183,7 +195,7 @@ func (c *Client) Command(args ...any) (json.RawMessage, error) {
 func (c *Client) CommandContext(ctx context.Context, args ...any) (json.RawMessage, error) {
 	select {
 	case <-c.closed:
-		return nil, fmt.Errorf("connection closed")
+		return nil, ErrClosed
 	default:
 	}
 
@@ -194,7 +206,7 @@ func (c *Client) CommandContext(ctx context.Context, args ...any) (json.RawMessa
 	select {
 	case <-c.closed:
 		c.mu.Unlock()
-		return nil, fmt.Errorf("connection closed")
+		return nil, ErrClosed
 	default:
 	}
 	c.pending[rid] = respCh
@@ -238,15 +250,15 @@ func (c *Client) CommandContext(ctx context.Context, args ...any) (json.RawMessa
 	select {
 	case resp, ok := <-respCh:
 		if !ok {
-			return nil, fmt.Errorf("connection closed while awaiting response")
+			return nil, fmt.Errorf("%w: awaiting response for request_id=%d", ErrClosed, rid)
 		}
 		return parseMpvResponse(resp)
 	case <-c.closed:
-		return nil, fmt.Errorf("connection closed")
+		return nil, ErrClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timer.C:
-		return nil, fmt.Errorf("timeout awaiting response for request_id=%d", rid)
+		return nil, fmt.Errorf("%w: awaiting response for request_id=%d", ErrTimeout, rid)
 	}
 }
 
@@ -266,22 +278,34 @@ func parseMpvResponse(raw json.RawMessage) (json.RawMessage, error) {
 	return raw, nil
 }
 
-// ObserveProperties registers property change notifications required by the TUI client.
-func (c *Client) ObserveProperties() error {
-	props := []string{
-		"pause",
-		"time-pos",
-		"duration",
-		"media-title",
-		"volume",
-		"mute",
-		"playlist-pos",
-		"playlist-count",
-		"eof-reached",
-		"idle-active",
+// DefaultObservedProperties contains the common properties observed by media players.
+var DefaultObservedProperties = []string{
+	"pause",
+	"time-pos",
+	"duration",
+	"media-title",
+	"volume",
+	"mute",
+	"playlist-pos",
+	"playlist-count",
+	"eof-reached",
+	"idle-active",
+}
+
+// ObserveProperty registers an individual property change notification with mpv.
+func (c *Client) ObserveProperty(id int64, property string) error {
+	_, err := c.Command("observe_property", id, property)
+	return err
+}
+
+// ObserveProperties registers change notifications for the given properties.
+// If no properties are provided, DefaultObservedProperties will be observed.
+func (c *Client) ObserveProperties(properties ...string) error {
+	if len(properties) == 0 {
+		properties = DefaultObservedProperties
 	}
-	for i, p := range props {
-		if _, err := c.Command("observe_property", i+1, p); err != nil {
+	for i, p := range properties {
+		if err := c.ObserveProperty(int64(i+1), p); err != nil {
 			return fmt.Errorf("observe %s: %w", p, err)
 		}
 	}

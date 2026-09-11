@@ -109,8 +109,8 @@ func TestEventsHandling(t *testing.T) {
 
 	// 2. Limpiar eventos antiguos que pudieron llegar durante la conexión
 	time.Sleep(100 * time.Millisecond)
-	for len(client.Events) > 0 {
-		<-client.Events
+	for len(client.Events()) > 0 {
+		<-client.Events()
 	}
 
 	// 3. Enviar el comando de cambio de volumen
@@ -124,7 +124,7 @@ func TestEventsHandling(t *testing.T) {
 	
 	for !foundVolume {
 		select {
-		case ev := <-client.Events:
+		case ev := <-client.Events():
 			name, val, ok := ev.PropertyChange()
 			if ok {
 				t.Logf("Evento recibido: %s = %v", name, val)

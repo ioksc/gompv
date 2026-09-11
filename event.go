@@ -14,13 +14,13 @@ const (
 
 // Event encapsulates an mpv event with helper methods to avoid manual type assertions.
 type Event struct {
-	Type string
+	Type EventType
 	Raw  map[string]any
 }
 
 // PropertyChange extracts the property name and its value if the event is a property-change.
 func (e Event) PropertyChange() (string, any, bool) {
-	if e.Type != string(EventPropertyChange) {
+	if e.Type != EventPropertyChange {
 		return "", nil, false
 	}
 	name, _ := e.Raw["name"].(string)
