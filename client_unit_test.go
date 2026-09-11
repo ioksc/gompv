@@ -226,3 +226,41 @@ func TestClientConcurrentCommands(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestClientIdleConnection(t *testing.T) {
+	srv := startFakeIPCServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			var req struct {
+				RequestID int64 `json:"request_id"`
+			}
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				continue
+			}
+			resp := fmt.Sprintf(`{"data":"pong","error":"success","request_id":%d}`+"\n", req.RequestID)
+			_, _ = conn.Write([]byte(resp))
+		}
+	})
+	defer srv.Close()
+
+	client, err := Connect(srv.socketPath)
+	if err != nil {
+		t.Fatalf("falló Connect: %v", err)
+	}
+	defer client.Close()
+
+	// Simular inactividad durante más de 2 segundos (el antiguo read deadline)
+	time.Sleep(2100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	raw, err := client.CommandContext(ctx, "ping")
+	if err != nil {
+		t.Fatalf("comando falló tras periodo de inactividad: %v", err)
+	}
+	if !strings.Contains(string(raw), "pong") {
+		t.Errorf("respuesta inesperada: %s", string(raw))
+	}
+}

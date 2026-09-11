@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -13,6 +14,9 @@ import (
 type Server struct {
 	cmd        *exec.Cmd
 	SocketPath string
+	waitOnce   sync.Once
+	waitErr    error
+	waitDone   chan struct{}
 }
 
 // StartServer removes any stale socket if it exists and launches mpv in background IPC mode.
@@ -42,6 +46,7 @@ func StartServer(socketPath string, files ...string) (*Server, error) {
 	return &Server{
 		cmd:        cmd,
 		SocketPath: socketPath,
+		waitDone:   make(chan struct{}),
 	}, nil
 }
 
@@ -61,9 +66,18 @@ func StartAndConnect(ctx context.Context, socketPath string, files ...string) (*
 	return srv, client, nil
 }
 
+func (s *Server) wait() error {
+	s.waitOnce.Do(func() {
+		s.waitErr = s.cmd.Wait()
+		close(s.waitDone)
+	})
+	<-s.waitDone
+	return s.waitErr
+}
+
 // Wait blocks until the underlying mpv process terminates.
 func (s *Server) Wait() error {
-	return s.cmd.Wait()
+	return s.wait()
 }
 
 // Stop terminates the mpv process cleanly with timeout fallback and removes the socket file.
@@ -72,17 +86,15 @@ func (s *Server) Stop() {
 		pgid := s.cmd.Process.Pid
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)
 
-		done := make(chan struct{})
 		go func() {
-			_ = s.cmd.Wait()
-			close(done)
+			_ = s.wait()
 		}()
 
 		select {
-		case <-done:
+		case <-s.waitDone:
 		case <-time.After(2 * time.Second):
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			_ = s.cmd.Wait()
+			_ = s.wait()
 		}
 	}
 	_ = os.Remove(s.SocketPath)

@@ -2,7 +2,6 @@ package gompv
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,6 +46,9 @@ func Connect(socketPath string) (*Client, error) {
 
 // ConnectWithRetry repeatedly attempts to connect until the socket appears or context is canceled.
 func ConnectWithRetry(ctx context.Context, socketPath string, interval time.Duration) (*Client, error) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
 	for {
 		c, err := Connect(socketPath)
 		if err == nil {
@@ -55,7 +57,7 @@ func ConnectWithRetry(ctx context.Context, socketPath string, interval time.Dura
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(interval):
+		case <-ticker.C:
 		}
 	}
 }
@@ -85,41 +87,25 @@ func (c *Client) readLoop() {
 	const maxLineSize = 8 * 1024 * 1024
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
-	for {
-		_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-
-		if !scanner.Scan() {
-			select {
-			case <-c.closed:
-				return
-			default:
-			}
-			if err := scanner.Err(); err != nil {
-				var netErr net.Error
-				if errors.As(err, &netErr) && netErr.Timeout() {
-					continue
-				}
-				if errors.Is(err, bufio.ErrTooLong) {
-					// The scanner becomes unusable after ErrTooLong (Scan() will return
-					// false indefinitely), so we cannot continue reading from it. Explicitly
-					// close the connection so the client receives a clear error instead of
-					// hanging until timeout.
-					_ = c.conn.Close()
-				}
-			}
-			return
-		}
-
-		decoder := json.NewDecoder(bytes.NewReader(scanner.Bytes()))
-		decoder.UseNumber()
-		var rawMsg map[string]any
-		if err := decoder.Decode(&rawMsg); err != nil {
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
 			continue
 		}
 
-		if eventType, isEvent := rawMsg["event"].(string); isEvent {
+		var header struct {
+			Event     string `json:"event"`
+			RequestID any    `json:"request_id"`
+		}
+		if err := json.Unmarshal(line, &header); err != nil {
+			continue
+		}
+
+		if header.Event != "" {
+			var rawMsg map[string]any
+			_ = json.Unmarshal(line, &rawMsg)
 			ev := Event{
-				Type: eventType,
+				Type: header.Event,
 				Raw:  rawMsg,
 			}
 			select {
@@ -132,8 +118,8 @@ func (c *Client) readLoop() {
 			continue
 		}
 
-		if ridRaw, ok := rawMsg["request_id"]; ok {
-			rid, ok := toInt64(ridRaw)
+		if header.RequestID != nil {
+			rid, ok := toInt64(header.RequestID)
 			if !ok {
 				continue
 			}
@@ -144,12 +130,19 @@ func (c *Client) readLoop() {
 			}
 			c.mu.Unlock()
 			if exists {
-				b, _ := json.Marshal(rawMsg)
+				msgCopy := make(json.RawMessage, len(line))
+				copy(msgCopy, line)
 				select {
-				case ch <- b:
+				case ch <- msgCopy:
 				default:
 				}
 			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			_ = c.conn.Close()
 		}
 	}
 }
@@ -299,7 +292,6 @@ func (c *Client) ObserveProperties() error {
 func (c *Client) Close() error {
 	c.signalClosed()
 	if c.conn != nil {
-		_ = c.conn.SetReadDeadline(time.Now())
 		return c.conn.Close()
 	}
 	return nil
